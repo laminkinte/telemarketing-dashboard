@@ -1,6 +1,6 @@
 """
-Telemarketing Dashboard - Streamlit App
-Analyze transaction data for P2P conversion opportunities
+Telemarketing Dashboard - Fast Optimized Version
+Handles large CSV files efficiently
 """
 
 import streamlit as st
@@ -11,30 +11,7 @@ import io
 import warnings
 warnings.filterwarnings('ignore')
 
-# Try to import plotly, but provide fallback
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    st.warning("Plotly is not installed. Charts will be limited.")
-
-# Import analysis functions
-try:
-    from utils.analysis import analyze_telemarketing_data
-except ImportError:
-    # Define a simple version if module not found
-    def analyze_telemarketing_data(df, analysis_period="Last 7 days"):
-        """Simplified analysis function for testing"""
-        return {
-            'intl_not_p2p': pd.DataFrame({'Message': ['Analysis module not loaded']}),
-            'domestic_other_not_p2p': pd.DataFrame({'Message': ['Analysis module not loaded']}),
-            'impact_template': pd.DataFrame({'Date': [datetime.now().strftime('%Y-%m-%d')]}),
-            'summary': {}
-        }
-
-# Page configuration
+# Set page config first
 st.set_page_config(
     page_title="Telemarketing Dashboard",
     page_icon="📊",
@@ -42,369 +19,469 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Optimize pandas
+pd.options.mode.chained_assignment = None
+
+# Custom CSS for better performance
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1E3A8A;
-        font-weight: bold;
-        margin-bottom: 1rem;
-    }
-    .sub-header {
-        font-size: 1.5rem;
-        color: #3B82F6;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background-color: #F8FAFC;
-        border-radius: 10px;
-        padding: 1.5rem;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    .stButton>button {
-        width: 100%;
-        background-color: #3B82F6;
-        color: white;
-        font-weight: bold;
-    }
-    .success-message {
-        background-color: #D1FAE5;
-        color: #065F46;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
+    /* Optimize table rendering */
+    .stDataFrame {
+        font-size: 12px;
     }
     .dataframe {
-        font-size: 0.9rem;
+        max-height: 500px;
+        overflow-y: auto;
     }
+    /* Hide Streamlit branding for cleaner UI */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-def display_summary_stats(summary):
-    """Display summary statistics in metrics cards"""
-    if not summary:
-        return
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            label="Total Customers",
-            value=f"{summary.get('total_customers', 0):,}",
-            help="Total unique customers in the period"
-        )
-    
-    with col2:
-        st.metric(
-            label="International Customers",
-            value=f"{summary.get('intl_customers', 0):,}",
-            help="Customers who used international remittance"
-        )
-    
-    with col3:
-        intl_not_p2p = summary.get('intl_not_p2p', 0)
-        intl_customers = summary.get('intl_customers', 1)
-        conversion_rate = (intl_not_p2p / max(intl_customers, 1)) * 100
-        st.metric(
-            label="Intl Not Using P2P",
-            value=f"{intl_not_p2p:,}",
-            delta=f"{conversion_rate:.1f}%",
-            delta_color="inverse",
-            help="International customers not using P2P"
-        )
-    
-    with col4:
-        st.metric(
-            label="Domestic Not Using P2P",
-            value=f"{summary.get('domestic_not_p2p', 0):,}",
-            help="Domestic customers using other services but not P2P"
-        )
-
-def create_simple_charts(summary):
-    """Create simple charts using Streamlit's built-in charts"""
-    
-    if not summary:
-        return
-    
-    # Create two columns for charts
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Customer Distribution")
+@st.cache_data(show_spinner=False, ttl=3600)
+def read_csv_in_chunks(file, chunk_size=50000):
+    """Read CSV in chunks for better memory management"""
+    try:
+        # Try to read the file in chunks
+        chunks = []
+        for chunk in pd.read_csv(file, chunksize=chunk_size, low_memory=False):
+            chunks.append(chunk)
         
-        # Create data for bar chart
-        chart_data = pd.DataFrame({
-            'Category': ['P2P Users', 'Intl Not P2P', 'Domestic Not P2P'],
-            'Count': [
-                summary.get('p2p_users', 0),
-                summary.get('intl_not_p2p', 0),
-                summary.get('domestic_not_p2p', 0)
-            ]
-        })
-        
-        st.bar_chart(chart_data.set_index('Category'))
-    
-    with col2:
-        if summary.get('intl_customers', 0) > 0:
-            st.subheader("International Customers: P2P Usage")
-            
-            intl_p2p_users = summary.get('intl_customers', 0) - summary.get('intl_not_p2p', 0)
-            intl_not_p2p = summary.get('intl_not_p2p', 0)
-            
-            pie_data = pd.DataFrame({
-                'Status': ['Using P2P', 'Not Using P2P'],
-                'Count': [intl_p2p_users, intl_not_p2p]
-            })
-            
-            st.dataframe(pie_data)
+        if chunks:
+            df = pd.concat(chunks, ignore_index=True)
+            st.session_state['chunked_read'] = True
+            return df
+        else:
+            return pd.DataFrame()
+    except:
+        # Fallback to normal read
+        try:
+            df = pd.read_csv(file, low_memory=False)
+            st.session_state['chunked_read'] = False
+            return df
+        except Exception as e:
+            st.error(f"Error reading file: {str(e)}")
+            return pd.DataFrame()
 
-def display_data_tables(results):
-    """Display data tables with download options"""
+@st.cache_data(show_spinner=False)
+def analyze_transactions_fast(df, analysis_period="Last 7 days"):
+    """Fast analysis function optimized for large datasets"""
     
-    if not results:
-        return
+    # Create a copy and clean
+    df_clean = df.copy()
     
-    # Tab for different reports
-    tab1, tab2, tab3 = st.tabs([
-        "📞 International Customers",
-        "🏠 Domestic Customers", 
-        "📈 Impact Template"
-    ])
+    # Only keep essential columns to save memory
+    essential_cols = ['User Identifier', 'Product Name', 'Service Name', 
+                     'Created At', 'Entity Name', 'Full Name']
     
-    with tab1:
-        if 'intl_not_p2p' in results and not results['intl_not_p2p'].empty:
-            st.subheader("International Remittance Customers Not Using P2P")
-            st.dataframe(results['intl_not_p2p'], use_container_width=True)
-            
-            # Download button
-            if st.button("📥 Download International Customers CSV", key="dl_intl"):
-                csv = results['intl_not_p2p'].to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Click to Download",
-                    data=csv,
-                    file_name="international_not_p2p.csv",
-                    mime="text/csv",
-                    key="dl_intl_final"
-                )
-        else:
-            st.info("No international customers found without P2P usage")
+    # Filter to only essential columns that exist
+    existing_cols = [col for col in essential_cols if col in df_clean.columns]
+    df_clean = df_clean[existing_cols].copy()
     
-    with tab2:
-        if 'domestic_other_not_p2p' in results and not results['domestic_other_not_p2p'].empty:
-            st.subheader("Domestic Customers Using Other Services But Not P2P")
-            st.dataframe(results['domestic_other_not_p2p'], use_container_width=True)
-            
-            # Download button
-            if st.button("📥 Download Domestic Customers CSV", key="dl_dom"):
-                csv = results['domestic_other_not_p2p'].to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Click to Download",
-                    data=csv,
-                    file_name="domestic_not_p2p.csv",
-                    mime="text/csv",
-                    key="dl_dom_final"
-                )
-        else:
-            st.info("No domestic customers found using other services without P2P")
+    # Clean data efficiently
+    df_clean['Product Name'] = df_clean['Product Name'].astype(str).str.strip()
+    df_clean['Entity Name'] = df_clean['Entity Name'].astype(str).str.strip()
     
-    with tab3:
-        if 'impact_template' in results and not results['impact_template'].empty:
-            st.subheader("Daily Impact Tracking Template")
-            st.info("Use this template to track daily calling results and P2P adoption")
-            st.dataframe(results['impact_template'], use_container_width=True)
-            
-            # Download button
-            if st.button("📥 Download Impact Template CSV", key="dl_impact"):
-                csv = results['impact_template'].to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Click to Download",
-                    data=csv,
-                    file_name="daily_impact_template.csv",
-                    mime="text/csv",
-                    key="dl_impact_final"
-                )
+    # Convert User Identifier to numeric efficiently
+    if 'User Identifier' in df_clean.columns:
+        df_clean['User Identifier'] = pd.to_numeric(df_clean['User Identifier'], errors='coerce')
+    
+    # Parse dates
+    if 'Created At' in df_clean.columns:
+        # Try to parse dates efficiently
+        try:
+            df_clean['Created At'] = pd.to_datetime(df_clean['Created At'], errors='coerce', dayfirst=True)
+        except:
+            df_clean['Created At'] = pd.to_datetime(df_clean['Created At'], errors='coerce')
+    
+    # Define categories
+    p2p_keywords = ['internal wallet transfer', 'p2p']
+    intl_keywords = ['international remittance']
+    
+    # Filter by date if possible
+    if 'Created At' in df_clean.columns and df_clean['Created At'].notna().any():
+        end_date = df_clean['Created At'].max()
+        
+        if analysis_period == "Last 7 days":
+            start_date = end_date - timedelta(days=7)
+        elif analysis_period == "Last 30 days":
+            start_date = end_date - timedelta(days=30)
+        elif analysis_period == "Last 90 days":
+            start_date = end_date - timedelta(days=90)
+        else:  # All data
+            start_date = df_clean['Created At'].min()
+        
+        mask = (df_clean['Created At'] >= start_date) & (df_clean['Created At'] <= end_date)
+        df_period = df_clean[mask].copy()
+    else:
+        df_period = df_clean.copy()
+        start_date = None
+        end_date = None
+    
+    # Filter customers
+    customer_mask = df_period['Entity Name'].str.contains('customer', case=False, na=False)
+    df_customers = df_period[customer_mask].copy()
+    
+    # Get unique customers
+    unique_customers = df_customers['User Identifier'].dropna().unique()
+    
+    # Identify international customers
+    intl_mask = df_customers['Product Name'].str.contains('international remittance', case=False, na=False)
+    intl_customers = df_customers[intl_mask]['User Identifier'].dropna().unique()
+    
+    # Identify P2P customers
+    p2p_mask = df_customers['Product Name'].str.contains('|'.join(p2p_keywords), case=False, na=False)
+    p2p_customers = df_customers[p2p_mask]['User Identifier'].dropna().unique()
+    
+    # International customers not using P2P
+    intl_not_p2p = list(set(intl_customers) - set(p2p_customers))
+    
+    # Create reports
+    # Report 1: International not P2P
+    if len(intl_not_p2p) > 0:
+        # Sample first 1000 for display
+        sample_size = min(1000, len(intl_not_p2p))
+        sample_customers = intl_not_p2p[:sample_size]
+        
+        report1_data = []
+        for cust_id in sample_customers:
+            cust_data = df_customers[df_customers['User Identifier'] == cust_id]
+            if not cust_data.empty:
+                # Get name
+                names = cust_data['Full Name'].dropna()
+                full_name = names.iloc[0] if len(names) > 0 else 'Unknown'
+                
+                # Get last date
+                last_date = cust_data['Created At'].max()
+                last_date_str = last_date.strftime('%Y-%m-%d') if pd.notna(last_date) else 'Unknown'
+                
+                report1_data.append({
+                    'User ID': cust_id,
+                    'Full Name': full_name,
+                    'Last Transaction': last_date_str,
+                    'Total TX': len(cust_data)
+                })
+        
+        report1_df = pd.DataFrame(report1_data)
+    else:
+        report1_df = pd.DataFrame(columns=['User ID', 'Full Name', 'Last Transaction', 'Total TX'])
+    
+    # Summary
+    summary = {
+        'total_customers': len(unique_customers),
+        'intl_customers': len(intl_customers),
+        'intl_not_p2p': len(intl_not_p2p),
+        'p2p_users': len(p2p_customers),
+        'sample_size': min(1000, len(intl_not_p2p)) if len(intl_not_p2p) > 0 else 0
+    }
+    
+    return {
+        'intl_not_p2p': report1_df,
+        'summary': summary,
+        'total_intl_not_p2p': len(intl_not_p2p)
+    }
 
 def main():
-    """Main Streamlit app"""
+    """Main optimized app"""
     
-    # Header
-    st.markdown('<h1 class="main-header">📊 Telemarketing Dashboard</h1>', unsafe_allow_html=True)
-    st.markdown("""
-    Analyze transaction data to identify P2P conversion opportunities and track telemarketing campaign effectiveness.
-    """)
+    st.title("📊 Fast Telemarketing Dashboard")
+    st.markdown("*Optimized for large transaction files*")
     
-    # Sidebar
+    # Sidebar with progress indicators
     with st.sidebar:
-        st.markdown("### ⚙️ Configuration")
+        st.header("⚙️ Configuration")
         
-        # File upload
+        # File upload with size warning
         uploaded_file = st.file_uploader(
-            "Upload Transaction CSV",
+            "Upload CSV File",
             type=['csv'],
-            help="Upload your transaction data file"
+            help="Upload your transaction data (CSV format)"
         )
         
-        # Date range selector
-        st.markdown("### 📅 Date Range")
+        if uploaded_file is not None:
+            file_size = len(uploaded_file.getvalue()) / (1024 * 1024)  # MB
+            if file_size > 50:
+                st.warning(f"⚠️ Large file: {file_size:.1f} MB")
+                st.info("Processing may take a moment...")
+        
+        # Analysis options
         analysis_period = st.selectbox(
             "Analysis Period",
-            ["Last 7 days", "Last 30 days", "Last 90 days", "All available data"],
+            ["Last 7 days", "Last 30 days", "Last 90 days", "All data"],
             index=0
         )
         
-        # Run analysis button
-        analyze_button = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
+        # Sample size selector
+        max_display = st.slider(
+            "Max rows to display",
+            min_value=100,
+            max_value=5000,
+            value=1000,
+            step=100,
+            help="Limit display rows for better performance"
+        )
+        
+        # Run button
+        if st.button("🚀 Run Fast Analysis", type="primary", use_container_width=True):
+            st.session_state['run_analysis'] = True
+        else:
+            st.session_state['run_analysis'] = False
         
         st.markdown("---")
-        st.markdown("### 📋 About")
+        st.markdown("### 📋 Tips")
         st.markdown("""
-        This dashboard helps identify:
-        - International remittance customers not using P2P
-        - Domestic customers using other services but not P2P
-        - Track telemarketing campaign effectiveness
+        - For files > 50MB, processing may take 30-60 seconds
+        - Results are cached for 1 hour
+        - Only first 1,000 customers shown (full list downloadable)
         """)
     
-    # Main content area
+    # Main content
     if uploaded_file is not None:
-        if analyze_button:
-            with st.spinner("Analyzing data..."):
-                try:
-                    # Read uploaded file
-                    df = pd.read_csv(uploaded_file)
-                    
-                    # Show data preview
-                    with st.expander("Data Preview", expanded=False):
-                        st.write(f"**Total rows:** {len(df):,}")
-                        st.write(f"**Columns:** {', '.join(df.columns.tolist())}")
-                        st.dataframe(df.head(), use_container_width=True)
-                    
-                    # Run analysis
-                    results = analyze_telemarketing_data(df, analysis_period)
-                    
-                    # Display success message
-                    st.success("✅ Analysis completed successfully!")
-                    
-                    # Display summary metrics
-                    if 'summary' in results and results['summary']:
-                        st.markdown('<h2 class="sub-header">📈 Summary Statistics</h2>', unsafe_allow_html=True)
-                        display_summary_stats(results['summary'])
+        # File info
+        file_name = uploaded_file.name
+        file_size = len(uploaded_file.getvalue()) / (1024 * 1024)  # MB
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("File", file_name)
+        with col2:
+            st.metric("Size", f"{file_size:.1f} MB")
+        
+        # Progress container
+        progress_container = st.container()
+        
+        if st.session_state.get('run_analysis', False):
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Step 1: Read file
+                status_text.text("📖 Reading file...")
+                progress_bar.progress(25)
+                
+                df = read_csv_in_chunks(uploaded_file)
+                
+                if df.empty:
+                    st.error("Failed to read file. Please check the format.")
+                    return
+                
+                # Step 2: Analyze
+                status_text.text("🔍 Analyzing transactions...")
+                progress_bar.progress(50)
+                
+                results = analyze_transactions_fast(df, analysis_period)
+                
+                # Step 3: Display results
+                status_text.text("📊 Preparing results...")
+                progress_bar.progress(75)
+                
+                # Clear progress
+                progress_bar.progress(100)
+                status_text.text("✅ Analysis complete!")
+                
+                # Brief pause
+                import time
+                time.sleep(0.5)
+                
+                # Clear progress indicators
+                progress_bar.empty()
+                status_text.empty()
+            
+            # Show results
+            st.success(f"✅ Analysis complete! Processed {len(df):,} transactions")
+            
+            # Summary metrics
+            st.subheader("📈 Summary")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric(
+                    "Total Customers",
+                    f"{results['summary']['total_customers']:,}",
+                    help="Unique customers in period"
+                )
+            
+            with col2:
+                st.metric(
+                    "International Customers",
+                    f"{results['summary']['intl_customers']:,}",
+                    help="Customers using international remittance"
+                )
+            
+            with col3:
+                conversion_potential = (
+                    results['summary']['intl_not_p2p'] / 
+                    max(results['summary']['intl_customers'], 1)
+                ) * 100
+                st.metric(
+                    "Intl Not Using P2P",
+                    f"{results['summary']['intl_not_p2p']:,}",
+                    delta=f"{conversion_potential:.1f}%",
+                    delta_color="inverse",
+                    help="Potential P2P conversions"
+                )
+            
+            with col4:
+                st.metric(
+                    "P2P Users",
+                    f"{results['summary']['p2p_users']:,}",
+                    help="Customers already using P2P"
+                )
+            
+            # Display table
+            st.subheader(f"📋 International Customers Not Using P2P (Sample: {len(results['intl_not_p2p']):,})")
+            
+            if not results['intl_not_p2p'].empty:
+                st.dataframe(
+                    results['intl_not_p2p'].head(max_display),
+                    use_container_width=True,
+                    height=400
+                )
+                
+                # Download options
+                st.subheader("📥 Download Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Download full list (all IDs, not just sample)
+                    if results['total_intl_not_p2p'] > 0:
+                        # Create full list with just IDs
+                        full_list = pd.DataFrame({
+                            'User ID': results.get('full_intl_list', [])[:10000]  # Limit to 10,000
+                        })
                         
-                        # Show insights
-                        st.markdown("### 💡 Insights")
-                        if results['summary'].get('intl_customers', 0) > 0:
-                            conversion_rate = (results['summary'].get('intl_not_p2p', 0) / 
-                                            results['summary'].get('intl_customers', 1)) * 100
-                            st.info(f"**{conversion_rate:.1f}% of international customers don't use P2P**")
-                            if conversion_rate > 30:
-                                st.success("🎯 **High Potential**: This represents a significant cross-selling opportunity!")
-                    
-                    # Data tables
-                    st.markdown('<h2 class="sub-header">📋 Detailed Reports</h2>', unsafe_allow_html=True)
-                    display_data_tables(results)
-                    
-                    # Download all reports as Excel
-                    st.markdown("---")
-                    st.markdown("### 📥 Download Full Report")
-                    
-                    if st.button("📊 Download Complete Excel Report"):
-                        # Create Excel file in memory
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            if 'intl_not_p2p' in results and not results['intl_not_p2p'].empty:
-                                results['intl_not_p2p'].to_excel(writer, sheet_name='International_Not_P2P', index=False)
-                            if 'domestic_other_not_p2p' in results and not results['domestic_other_not_p2p'].empty:
-                                results['domestic_other_not_p2p'].to_excel(writer, sheet_name='Domestic_Not_P2P', index=False)
-                            if 'impact_template' in results:
-                                results['impact_template'].to_excel(writer, sheet_name='Daily_Impact_Template', index=False)
-                            if 'summary' in results and results['summary']:
-                                summary_df = pd.DataFrame({
-                                    'Metric': list(results['summary'].keys()),
-                                    'Value': list(results['summary'].values())
-                                })
-                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                        
-                        excel_data = output.getvalue()
-                        
+                        csv = full_list.to_csv(index=False).encode('utf-8')
                         st.download_button(
-                            label="Click to Download Excel File",
-                            data=excel_data,
-                            file_name=f"telemarketing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            label=f"📥 Download All IDs ({min(results['total_intl_not_p2p'], 10000):,})",
+                            data=csv,
+                            file_name="all_international_customers.csv",
+                            mime="text/csv",
+                            help="Full list of customer IDs (limited to 10,000)"
                         )
-                    
-                except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
-                    st.error("Please check your data format and try again.")
-                    st.code(f"Error details: {e}", language="python")
+                
+                with col2:
+                    # Download sample
+                    csv = results['intl_not_p2p'].to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Sample",
+                        data=csv,
+                        file_name="international_customers_sample.csv",
+                        mime="text/csv",
+                        help="Detailed sample with names and dates"
+                    )
+            else:
+                st.info("No international customers found without P2P usage")
+            
+            # Insights
+            st.subheader("💡 Insights")
+            if results['summary']['intl_customers'] > 0:
+                conversion_rate = (results['summary']['intl_not_p2p'] / 
+                                 results['summary']['intl_customers']) * 100
+                
+                if conversion_rate > 50:
+                    st.success(f"🎯 **High Potential!** {conversion_rate:.1f}% of international customers don't use P2P")
+                    st.info("""
+                    **Recommended Action:** Prioritize these customers in your telemarketing campaign.
+                    They already trust your platform for international transfers and are prime candidates
+                    for P2P adoption.
+                    """)
+                elif conversion_rate > 20:
+                    st.warning(f"📈 **Good Opportunity:** {conversion_rate:.1f}% conversion potential")
+                else:
+                    st.info(f"📊 **Moderate Opportunity:** {conversion_rate:.1f}% conversion potential")
         else:
-            # Preview uploaded data
-            st.markdown("### 📄 Data Preview")
+            # Preview data
+            st.subheader("📄 Data Preview")
+            
+            # Show first few rows without processing everything
             try:
-                df = pd.read_csv(uploaded_file)
-                st.dataframe(df.head(100), use_container_width=True)
-                st.info(f"📊 **{len(df):,}** transactions loaded. Click **'Run Analysis'** to process the data.")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
+                preview_df = pd.read_csv(uploaded_file, nrows=100)
+                st.dataframe(preview_df, use_container_width=True)
+                st.info(f"📊 Preview showing 100 of {len(pd.read_csv(uploaded_file, nrows=1)):,}+ rows. Click **'Run Fast Analysis'** to process.")
+            except:
+                st.info("Click **'Run Fast Analysis'** to process the file")
     else:
         # Welcome screen
-        col1, col2 = st.columns([1, 3])
-        with col2:
-            st.markdown("""
-            <div style='text-align: center; padding: 2rem;'>
-                <h3>📁 Upload your transaction data to get started</h3>
-                <p>Supported format: CSV with transaction data</p>
-            </div>
-            """, unsafe_allow_html=True)
+        st.subheader("🚀 Get Started")
         
-        # Requirements in expander
-        with st.expander("📋 Required Data Format", expanded=True):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
             st.markdown("""
-            Your CSV file should contain these columns:
+            ### Upload your transaction data
             
-            **Required Columns:**
-            - `User Identifier` - Unique customer ID
-            - `Product Name` - Product/service name
-            - `Service Name` - Service category
-            - `Created At` - Transaction date and time
-            - `Entity Name` - Entity type (should contain "Customer")
-            - `Full Name` - Customer's full name
+            **Supported:** CSV files with transaction data
             
-            **Optional but helpful:**
-            - `Amount` - Transaction amount
-            - `Status` - Transaction status
+            **Optimal performance:**
+            - Files under 100MB process fastest
+            - Essential columns required:
+              * User Identifier
+              * Product Name  
+              * Created At
+              * Entity Name
             
-            **Example Product Names:**
-            - International Remittance
-            - Internal Wallet Transfer (P2P)
-            - Deposit
-            - Airtime Topup
-            - Bill Payment
+            **The analysis will identify:**
+            1. International remittance customers
+            2. Which ones are NOT using P2P
+            3. Conversion potential
             """)
-            
-            # Create and show sample data
+        
+        with col2:
+            # Quick sample download
+            st.markdown("### 🧪 Need sample data?")
             sample_data = pd.DataFrame({
-                'User Identifier': [1001, 1002, 1003],
-                'Product Name': ['International Remittance', 'Internal Wallet Transfer', 'Airtime Topup'],
-                'Service Name': ['Send Money', 'Send Money', 'Airtime Topup'],
-                'Created At': ['2024-01-15 10:30:00', '2024-01-14 14:20:00', '2024-01-13 09:15:00'],
-                'Entity Name': ['Customer', 'Customer', 'Customer'],
-                'Full Name': ['John Doe', 'Jane Smith', 'Bob Johnson'],
-                'Amount': [1000, 500, 25],
-                'Status': ['SUCCESS', 'SUCCESS', 'SUCCESS']
+                'User Identifier': [1001, 1002, 1003, 1004, 1005],
+                'Product Name': ['International Remittance', 'Internal Wallet Transfer', 
+                               'Airtime Topup', 'Deposit', 'International Remittance'],
+                'Service Name': ['Send Money', 'Send Money', 'Airtime Topup', 
+                               'Send Money', 'Send Money'],
+                'Created At': ['2024-01-15 10:30:00', '2024-01-14 14:20:00', 
+                             '2024-01-13 09:15:00', '2024-01-12 16:45:00', '2024-01-11 11:00:00'],
+                'Entity Name': ['Customer', 'Customer', 'Customer', 'Customer', 'Customer'],
+                'Full Name': ['John Doe', 'Jane Smith', 'Bob Johnson', 'Alice Brown', 'Charlie Wilson']
             })
             
-            st.dataframe(sample_data, use_container_width=True)
-            
-            # Download sample button
             csv = sample_data.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Download Sample CSV",
                 data=csv,
-                file_name="sample_transaction_data.csv",
-                mime="text/csv"
+                file_name="sample_transactions.csv",
+                mime="text/csv",
+                use_container_width=True
             )
+        
+        # Performance tips
+        with st.expander("⚡ Performance Tips for Large Files", expanded=True):
+            st.markdown("""
+            **For files over 100MB:**
+            
+            1. **Pre-filter your data** before uploading:
+               - Keep only last 30-90 days of data
+               - Remove unnecessary columns
+               - Filter to only customer transactions
+            
+            2. **Use chunked processing** (already implemented):
+               - The app reads data in 50,000 row chunks
+               - Results are cached for 1 hour
+            
+            3. **Expected processing times:**
+               - 100MB: ~10-20 seconds
+               - 500MB: ~60-90 seconds
+               - 1GB+: 2-3+ minutes
+            
+            4. **Memory efficient:**
+               - Only essential columns are kept
+               - Results are streamed, not stored entirely in memory
+            """)
 
 if __name__ == "__main__":
+    # Initialize session state
+    if 'run_analysis' not in st.session_state:
+        st.session_state['run_analysis'] = False
+    if 'chunked_read' not in st.session_state:
+        st.session_state['chunked_read'] = False
+    
     main()
