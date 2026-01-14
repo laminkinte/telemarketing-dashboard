@@ -1,0 +1,57 @@
+
+## **5. `.gitignore`**
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Data files
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.pkl
+*.pickle
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Secrets
+secrets.toml
+.env
+*.key
+*.pem
+
+# Output files
+output/
+reports/
+*.html
