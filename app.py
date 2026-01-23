@@ -4,18 +4,16 @@ import numpy as np
 from datetime import datetime, timedelta
 import io
 import warnings
-import zipfile
 warnings.filterwarnings('ignore')
 
-# Check for required libraries
+# Try to import required libraries
 try:
     import openpyxl
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
-    st.warning("openpyxl not installed. Excel export will use CSV format.")
+    st.warning("openpyxl not installed. Excel export will not be available.")
 
-# Try to import plotly with fallback
 try:
     import plotly.express as px
     import plotly.graph_objects as go
@@ -73,18 +71,6 @@ st.markdown("""
         border-left: 4px solid #3B82F6;
         margin: 0.5rem 0;
     }
-    .segment-badge {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 1rem;
-        font-size: 0.875rem;
-        font-weight: 500;
-        margin: 0.25rem;
-    }
-    .segment-25 { background-color: #dcfce7; color: #166534; }
-    .segment-50 { background-color: #fef3c7; color: #92400e; }
-    .segment-75 { background-color: #fef3c7; color: #92400e; }
-    .segment-100 { background-color: #fee2e2; color: #991b1b; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -128,7 +114,7 @@ def load_data(uploaded_file):
         
         df['User Identifier'] = pd.to_numeric(df['User Identifier'], errors='coerce')
         
-        # Parse date column with multiple format handling
+        # Parse date column
         date_formats = ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%d-%m-%Y %H:%M:%S', 
                        '%d/%m/%Y %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y']
         
@@ -151,10 +137,7 @@ def load_data(uploaded_file):
         
         # Convert transaction amount to numeric if available
         if 'Transaction Amount' in df.columns:
-            # Clean the Transaction Amount column
-            df['Transaction Amount'] = df['Transaction Amount'].astype(str).str.replace(',', '').str.replace('$', '').str.replace('€', '').str.replace('£', '').str.strip()
             df['Transaction Amount'] = pd.to_numeric(df['Transaction Amount'], errors='coerce')
-            # Fill NaN with 0 for amount calculations
             df['Transaction Amount'] = df['Transaction Amount'].fillna(0)
         
         return df
@@ -163,172 +146,211 @@ def load_data(uploaded_file):
         st.error(f"Error loading file: {str(e)}")
         return None
 
-def create_zip_with_csv_files(results, filter_desc=""):
-    """Create a ZIP file with all CSV reports"""
-    try:
-        # Create a BytesIO object for the zip file
-        zip_buffer = io.BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # 1. Executive Summary CSV
-            summary_data = [
-                ['TELEMARKETING CAMPAIGN ANALYSIS REPORT'],
-                ['Generated on', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
-                ['Filter Applied', filter_desc[:200]],
-                ['Report Period', f"{results['summary_stats']['start_date']} to {results['summary_stats']['end_date']}"],
-                [''],
-                ['OVERALL SUMMARY'],
-                ['Total Transactions', results['summary_stats']['total_transactions']],
-                ['Unique Customers', results['summary_stats']['unique_customers']],
-                ['International Customers', results['summary_stats']['intl_customers']],
-                ['P2P Customers', results['summary_stats']['p2p_customers']],
-                ['Other Services Customers', results['summary_stats']['other_customers']],
-                [''],
-                ['TARGET GROUPS SUMMARY'],
-                ['International Customers Not Using P2P', results['summary_stats']['intl_not_p2p']],
-                ['Domestic Customers Not Using P2P', results['summary_stats']['domestic_not_p2p']],
-                ['Total Addressable Market', results['summary_stats']['intl_not_p2p'] + results['summary_stats']['domestic_not_p2p']],
-                [''],
-                ['INTERNATIONAL WITHDRAWAL ANALYSIS'],
-                ['Total International Recipients', results['summary_stats'].get('total_intl_recipients', 0)],
-                ['Average Withdrawal Percentage', f"{results['summary_stats'].get('avg_withdrawal_percentage', 0):.1f}% of International Received"],
-                ['Segment ≤25%', results['summary_stats'].get('intl_withdrawal_segment_25', 0)],
-                ['Segment 25%-50%', results['summary_stats'].get('intl_withdrawal_segment_50', 0)],
-                ['Segment 50%-75%', results['summary_stats'].get('intl_withdrawal_segment_75', 0)],
-                ['Segment 75%-100%', results['summary_stats'].get('intl_withdrawal_segment_100', 0)],
-                [''],
-                ['SPECIFIC INTERNATIONAL GROUPS'],
-                ['Received & Withdrew', results['summary_stats'].get('received_withdrew_count', 0)],
-                ['Received, No Withdrawal, Other Services', results['summary_stats'].get('received_no_withdraw_other_count', 0)],
-                ['Received & Only Withdrew', results['summary_stats'].get('received_only_withdraw_count', 0)]
-            ]
-            
-            summary_df = pd.DataFrame(summary_data)
-            summary_csv = summary_df.to_csv(index=False, header=False).encode('utf-8')
-            zip_file.writestr('Executive_Summary.csv', summary_csv)
-            
-            # 2. International Targets
-            if not results['intl_not_p2p'].empty:
-                intl_csv = results['intl_not_p2p'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('International_Targets.csv', intl_csv)
-            
-            # 3. Domestic Targets
-            if not results['domestic_other_not_p2p'].empty:
-                domestic_csv = results['domestic_other_not_p2p'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('Domestic_Targets.csv', domestic_csv)
-            
-            # 4. International Withdrawal Segments
-            if 'detailed_analysis' in results['intl_withdrawal_segments'] and not results['intl_withdrawal_segments']['detailed_analysis'].empty:
-                segments_csv = results['intl_withdrawal_segments']['detailed_analysis'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('Intl_Withdrawal_Segments.csv', segments_csv)
-            
-            # 5. International Received & Withdrew
-            if 'received_withdrew' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_withdrew'].empty:
-                received_withdrew_csv = results['specific_intl_groups']['received_withdrew'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('Intl_Received_Withdrew.csv', received_withdrew_csv)
-            
-            # 6. International No Withdraw Other
-            if 'received_no_withdraw_other' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_no_withdraw_other'].empty:
-                no_withdraw_csv = results['specific_intl_groups']['received_no_withdraw_other'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('Intl_No_Withdraw_Other.csv', no_withdraw_csv)
-            
-            # 7. International Only Withdrew
-            if 'received_only_withdraw' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_only_withdraw'].empty:
-                only_withdrew_csv = results['specific_intl_groups']['received_only_withdraw'].to_csv(index=False).encode('utf-8')
-                zip_file.writestr('Intl_Only_Withdrew.csv', only_withdrew_csv)
-            
-            # 8. Impact Template
-            impact_csv = results['impact_template'].to_csv(index=False).encode('utf-8')
-            zip_file.writestr('Impact_Template.csv', impact_csv)
-            
-            # 9. Detailed Metrics
-            metrics_data = [
-                ['DETAILED PERFORMANCE METRICS'],
-                [''],
-                ['CONVERSION POTENTIAL ANALYSIS'],
-                ['International to P2P Conversion Rate', f"{(results['summary_stats']['intl_not_p2p'] / max(results['summary_stats']['intl_customers'], 1) * 100):.1f}%"],
-                ['Domestic Cross-sell Potential', f"{(results['summary_stats']['domestic_not_p2p'] / max(results['summary_stats']['other_customers'], 1) * 100):.1f}%"],
-                ['Overall Market Penetration', f"{(results['summary_stats']['p2p_customers'] / max(results['summary_stats']['unique_customers'], 1) * 100):.1f}%"],
-                [''],
-                ['INTERNATIONAL WITHDRAWAL BEHAVIOR (Percentage against International Received)'],
-                ['Low Withdrawal (≤25%) Customers', results['summary_stats'].get('intl_withdrawal_segment_25', 0)],
-                ['Moderate Withdrawal (25-50%) Customers', results['summary_stats'].get('intl_withdrawal_segment_50', 0)],
-                ['High Withdrawal (50-75%) Customers', results['summary_stats'].get('intl_withdrawal_segment_75', 0)],
-                ['Very High Withdrawal (75-100%) Customers', results['summary_stats'].get('intl_withdrawal_segment_100', 0)],
-                [''],
-                ['CUSTOMER SEGMENT DISTRIBUTION'],
-                ['International Focus Group Size', results['summary_stats']['intl_not_p2p']],
-                ['Domestic Focus Group Size', results['summary_stats']['domestic_not_p2p']],
-                ['Received & Withdrew Group', results['summary_stats'].get('received_withdrew_count', 0)],
-                ['Received, No Withdrawal Group', results['summary_stats'].get('received_no_withdraw_other_count', 0)],
-                ['Received & Only Withdrew Group', results['summary_stats'].get('received_only_withdraw_count', 0)]
-            ]
-            
-            metrics_df = pd.DataFrame(metrics_data)
-            metrics_csv = metrics_df.to_csv(index=False, header=False).encode('utf-8')
-            zip_file.writestr('Detailed_Metrics.csv', metrics_csv)
-            
-            # 10. Recommendations
-            recommendations = [
-                ['TELEMARKETING CAMPAIGN RECOMMENDATIONS'],
-                [''],
-                ['PRIORITY 1: INTERNATIONAL CUSTOMER ENGAGEMENT'],
-                [f'1. Target {results["summary_stats"]["intl_not_p2p"]} international customers not using P2P'],
-                ['2. Focus on customers with recent international transactions'],
-                ['3. Offer P2P fee waivers for first 3 transactions'],
-                ['4. Bundle P2P with international remittance services'],
-                [''],
-                ['PRIORITY 2: DOMESTIC CUSTOMER CROSS-SELL'],
-                [f'5. Engage {results["summary_stats"]["domestic_not_p2p"]} domestic customers'],
-                ['6. Promote P2P as faster alternative to current services'],
-                ['7. Offer loyalty rewards for P2P adoption'],
-                [''],
-                ['INTERNATIONAL WITHDRAWAL SEGMENT STRATEGY (Based on % of International Received)'],
-                [f'8. Low Withdrawal (≤25%): {results["summary_stats"].get("intl_withdrawal_segment_25", 0)} customers - Focus on retention & premium services'],
-                [f'9. Moderate (25-50%): {results["summary_stats"].get("intl_withdrawal_segment_50", 0)} customers - Balance service education'],
-                [f'10. High (50-75%): {results["summary_stats"].get("intl_withdrawal_segment_75", 0)} customers - Risk mitigation strategies'],
-                [f'11. Very High (75-100%): {results["summary_stats"].get("intl_withdrawal_segment_100", 0)} customers - Immediate attention required'],
-                [''],
-                ['CAMPAIGN IMPLEMENTATION'],
-                ['12. Use the Impact Template for daily tracking'],
-                ['13. Schedule calls during peak transaction hours'],
-                ['14. Train agents on P2P benefits and features'],
-                ['15. Track conversion rates weekly'],
-                ['16. Collect customer feedback systematically'],
-                ['17. Follow up with unreached customers within 48 hours'],
-                ['18. Monitor high-withdrawal customers for churn risk'],
-                ['19. Develop targeted messaging for each segment'],
-                ['20. Set clear KPIs and review progress bi-weekly']
-            ]
-            
-            rec_df = pd.DataFrame(recommendations)
-            rec_csv = rec_df.to_csv(index=False, header=False).encode('utf-8')
-            zip_file.writestr('Recommendations.csv', rec_csv)
-        
-        zip_buffer.seek(0)
-        return zip_buffer
+def filter_by_customer_pair(df, filter_pair):
+    """Filter customers based on transaction behavior pairs"""
     
-    except Exception as e:
-        st.error(f"Error creating ZIP file: {str(e)}")
-        return None
-
-# All other functions remain the same as in the previous code...
-# [Include all the other functions from the previous code here, including:
-# filter_by_customer_pair, analyze_intl_withdrawal_segments, 
-# analyze_specific_intl_groups, filter_data, analyze_telemarketing_data]
-
-# [IMPORTANT: Paste all the other functions from the previous code here, 
-# but replace the create_comprehensive_excel_report function with the simplified version below]
-
-def create_comprehensive_excel_report(results, filter_desc=""):
-    """Create comprehensive Excel report with all sheets"""
-    if not OPENPYXL_AVAILABLE:
-        st.warning("openpyxl not available. Using CSV format for export.")
-        return create_zip_with_csv_files(results, filter_desc)
+    # Define product categories
+    p2p_products = ['Internal Wallet Transfer (P2P)', 'Internal Wallet Transfer', 'P2P Transfer', 'Wallet Transfer', 'P2P']
+    international_remittance = ['International Remittance', 'International Transfer', 'Remittance', 'International']
+    deposit_products = ['Deposit', 'Cash In', 'Deposit Customer', 'Deposit Agent']
+    withdrawal_products = ['Withdrawal', 'Scan To Withdraw Agent', 'Scan To Withdraw Customer', 'Cash Out', 'Withdraw']
     
+    # Get unique customers
+    unique_customers = df['User Identifier'].dropna().unique()
+    
+    # Helper function to get customers for a product category
+    def get_customers_for_product(product_list):
+        mask = df['Product Name'].str.contains('|'.join(product_list), case=False, na=False)
+        return set(df[mask]['User Identifier'].dropna().unique())
+    
+    # Get customer sets for each product category
+    p2p_customers = get_customers_for_product(p2p_products)
+    intl_customers = get_customers_for_product(international_remittance)
+    deposit_customers = get_customers_for_product(deposit_products)
+    withdrawal_customers = get_customers_for_product(withdrawal_products)
+    
+    # Apply the selected filter pair
+    filtered_customers = set()
+    filter_description = ""
+    
+    if filter_pair == "intl_not_p2p":
+        # Customers who did International remittance but not P2P
+        filtered_customers = intl_customers - p2p_customers
+        filter_description = f"Customers who did International remittance but NOT P2P\n\n• International Customers: {len(intl_customers):,}\n• P2P Customers: {len(p2p_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "p2p_not_deposit":
+        # Customers who did P2P but not Deposit
+        filtered_customers = p2p_customers - deposit_customers
+        filter_description = f"Customers who did P2P but NOT Deposit\n\n• P2P Customers: {len(p2p_customers):,}\n• Deposit Customers: {len(deposit_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "p2p_and_withdrawal":
+        # Customers who did P2P and withdrawal
+        filtered_customers = p2p_customers & withdrawal_customers
+        filter_description = f"Customers who did BOTH P2P and Withdrawal\n\n• P2P Customers: {len(p2p_customers):,}\n• Withdrawal Customers: {len(withdrawal_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "intl_and_p2p":
+        # Customers who did international remittances and P2P
+        filtered_customers = intl_customers & p2p_customers
+        filter_description = f"Customers who did BOTH International remittance and P2P\n\n• International Customers: {len(intl_customers):,}\n• P2P Customers: {len(p2p_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "all_customers":
+        # All customers (no filter)
+        filtered_customers = set(unique_customers)
+        filter_description = f"All Customers\n\n• Total Unique Customers: {len(filtered_customers):,}"
+    
+    # Filter the dataframe to only include transactions from the selected customers
+    if filtered_customers:
+        filtered_df = df[df['User Identifier'].isin(filtered_customers)].copy()
+    else:
+        filtered_df = pd.DataFrame(columns=df.columns)
+    
+    return filtered_df, filter_description, len(filtered_customers)
+
+def analyze_telemarketing_data(filtered_df):
+    """Main analysis function with all reports"""
+    # Define product categories
+    p2p_products = ['Internal Wallet Transfer (P2P)', 'Internal Wallet Transfer', 'P2P Transfer', 'Wallet Transfer']
+    international_remittance = ['International Remittance', 'International Transfer', 'Remittance']
+    other_services = [
+        'Deposit', 'Scan To Withdraw Agent', 'Scan To Withdraw Customer', 
+        'Scan To Send', 'Ticket', 'Cash In', 'Cash Out', 'Withdrawal'
+    ]
+    bill_payment_services = ['Bill Payment', 'Airtime Topup', 'Utility Payment', 'Topup']
+    
+    # Get unique customers
+    unique_customers = filtered_df['User Identifier'].dropna().unique()
+    
+    # REPORT 1: International remittance customers not using P2P
+    intl_pattern = '|'.join(international_remittance)
+    intl_mask = filtered_df['Product Name'].str.contains(intl_pattern, case=False, na=False)
+    intl_customers = filtered_df[intl_mask]['User Identifier'].dropna().unique()
+    
+    p2p_mask = filtered_df['Product Name'].str.contains('|'.join(p2p_products), case=False, na=False)
+    p2p_customers = filtered_df[p2p_mask]['User Identifier'].dropna().unique()
+    
+    intl_not_p2p = [cust for cust in intl_customers if cust not in p2p_customers]
+    
+    # Create detailed DataFrame for international customers not using P2P
+    intl_details = []
+    for cust_id in intl_not_p2p[:1000]:
+        cust_records = filtered_df[filtered_df['User Identifier'] == cust_id]
+        if not cust_records.empty:
+            # Get customer name
+            name_record = cust_records[cust_records['Full Name'].notna() & (cust_records['Full Name'] != 'nan')]
+            full_name = name_record.iloc[0]['Full Name'] if not name_record.empty else 'Name not available'
+            
+            # Calculate metrics
+            total_transactions = len(cust_records)
+            intl_count = len(cust_records[intl_mask])
+            p2p_count = len(cust_records[p2p_mask])
+            
+            intl_details.append({
+                'User_ID': int(cust_id) if pd.notna(cust_id) else 0,
+                'Full_Name': full_name,
+                'International_Transaction_Count': intl_count,
+                'P2P_Transaction_Count': p2p_count,
+                'Total_Transactions': total_transactions,
+                'Last_Transaction_Date': cust_records['Created At'].max().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].max()) else 'Unknown',
+                'First_Transaction_Date': cust_records['Created At'].min().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].min()) else 'Unknown',
+                'Customer_Since': cust_records['Created At'].min().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].min()) else 'Unknown'
+            })
+    
+    report1_df = pd.DataFrame(intl_details) if intl_details else pd.DataFrame(
+        columns=['User_ID', 'Full_Name', 'International_Transaction_Count', 'P2P_Transaction_Count',
+                'Total_Transactions', 'Last_Transaction_Date', 'First_Transaction_Date', 'Customer_Since']
+    )
+    
+    # REPORT 2: Non-international customers using other services but not P2P
+    other_mask = filtered_df['Product Name'].str.contains('|'.join(other_services + bill_payment_services), case=False, na=False)
+    other_customers = filtered_df[other_mask]['User Identifier'].dropna().unique()
+    
+    domestic_other_not_p2p = [
+        cust for cust in other_customers 
+        if (cust not in intl_customers) and (cust not in p2p_customers)
+    ]
+    
+    domestic_details = []
+    for cust_id in domestic_other_not_p2p[:1000]:
+        cust_records = filtered_df[filtered_df['User Identifier'] == cust_id]
+        if not cust_records.empty:
+            # Get customer name
+            name_record = cust_records[cust_records['Full Name'].notna() & (cust_records['Full Name'] != 'nan')]
+            full_name = name_record.iloc[0]['Full Name'] if not name_record.empty else 'Name not available'
+            
+            # Get services used
+            services_used = cust_records['Product Name'].dropna().unique()
+            other_services_list = [str(s) for s in services_used if any(
+                service.lower() in str(s).lower() for service in other_services + bill_payment_services
+            )]
+            
+            domestic_details.append({
+                'User_ID': int(cust_id) if pd.notna(cust_id) else 0,
+                'Full_Name': full_name,
+                'Total_Transactions': len(cust_records),
+                'Other_Services_Count': len(other_services_list),
+                'Other_Services_Used': ', '.join(other_services_list[:5]) if other_services_list else 'None',
+                'Last_Transaction_Date': cust_records['Created At'].max().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].max()) else 'Unknown',
+                'First_Transaction_Date': cust_records['Created At'].min().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].min()) else 'Unknown',
+                'Customer_Since': cust_records['Created At'].min().strftime('%Y-%m-%d') if pd.notna(cust_records['Created At'].min()) else 'Unknown'
+            })
+    
+    report2_df = pd.DataFrame(domestic_details) if domestic_details else pd.DataFrame(
+        columns=['User_ID', 'Full_Name', 'Total_Transactions', 'Other_Services_Count',
+                'Other_Services_Used', 'Last_Transaction_Date', 'First_Transaction_Date', 'Customer_Since']
+    )
+    
+    # REPORT 3: Daily Impact Report Template
+    if len(filtered_df) > 0 and filtered_df['Created At'].notna().any():
+        start_date = filtered_df['Created At'].min().date()
+        end_date = filtered_df['Created At'].max().date()
+        dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    else:
+        dates = pd.date_range(end=datetime.now().date(), periods=7, freq='D')
+    
+    impact_template = []
+    for date in dates:
+        impact_template.append({
+            'Date': date.strftime('%Y-%m-%d'),
+            'Total_Customers_Called': 0,
+            'Customers_Reached': 0,
+            'Customers_Not_Reached': 0,
+            'P2P_Adoption_After_Call': 0,
+            'Conversion_Rate_Percent': 0.0,
+            'Average_Transaction_Value': 0.0,
+            'Customer_Feedback': '',
+            'Follow_up_Required': '',
+            'Notes': ''
+        })
+    
+    impact_df = pd.DataFrame(impact_template)
+    
+    # Summary statistics
+    summary_stats = {
+        'total_transactions': len(filtered_df),
+        'unique_customers': len(unique_customers),
+        'intl_customers': len(intl_customers),
+        'intl_not_p2p': len(intl_not_p2p),
+        'p2p_customers': len(p2p_customers),
+        'other_customers': len(other_customers),
+        'domestic_not_p2p': len(domestic_other_not_p2p),
+        'start_date': filtered_df['Created At'].min().strftime('%Y-%m-%d') if len(filtered_df) > 0 and filtered_df['Created At'].notna().any() else 'N/A',
+        'end_date': filtered_df['Created At'].max().strftime('%Y-%m-%d') if len(filtered_df) > 0 and filtered_df['Created At'].notna().any() else 'N/A'
+    }
+    
+    return {
+        'intl_not_p2p': report1_df,
+        'domestic_other_not_p2p': report2_df,
+        'impact_template': impact_df,
+        'summary_stats': summary_stats
+    }
+
+def create_excel_workbook(results, filter_desc=""):
+    """Create Excel workbook with all reports"""
     try:
+        # Create a BytesIO object for the Excel file
         output = io.BytesIO()
         
+        # Create Excel writer
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # Sheet 1: Executive Summary
             summary_data = [
@@ -347,26 +369,13 @@ def create_comprehensive_excel_report(results, filter_desc=""):
                 ['TARGET GROUPS SUMMARY'],
                 ['International Customers Not Using P2P', results['summary_stats']['intl_not_p2p']],
                 ['Domestic Customers Not Using P2P', results['summary_stats']['domestic_not_p2p']],
-                ['Total Addressable Market', results['summary_stats']['intl_not_p2p'] + results['summary_stats']['domestic_not_p2p']],
-                [''],
-                ['INTERNATIONAL WITHDRAWAL ANALYSIS'],
-                ['Total International Recipients', results['summary_stats'].get('total_intl_recipients', 0)],
-                ['Average Withdrawal Percentage', f"{results['summary_stats'].get('avg_withdrawal_percentage', 0):.1f}% of International Received"],
-                ['Segment ≤25%', results['summary_stats'].get('intl_withdrawal_segment_25', 0)],
-                ['Segment 25%-50%', results['summary_stats'].get('intl_withdrawal_segment_50', 0)],
-                ['Segment 50%-75%', results['summary_stats'].get('intl_withdrawal_segment_75', 0)],
-                ['Segment 75%-100%', results['summary_stats'].get('intl_withdrawal_segment_100', 0)],
-                [''],
-                ['SPECIFIC INTERNATIONAL GROUPS'],
-                ['Received & Withdrew', results['summary_stats'].get('received_withdrew_count', 0)],
-                ['Received, No Withdrawal, Other Services', results['summary_stats'].get('received_no_withdraw_other_count', 0)],
-                ['Received & Only Withdrew', results['summary_stats'].get('received_only_withdraw_count', 0)]
+                ['Total Addressable Market', results['summary_stats']['intl_not_p2p'] + results['summary_stats']['domestic_not_p2p']]
             ]
             
             summary_df = pd.DataFrame(summary_data)
             summary_df.to_excel(writer, sheet_name='Executive_Summary', index=False, header=False)
             
-            # Sheet 2: International Targets (Not Using P2P)
+            # Sheet 2: International Targets
             if not results['intl_not_p2p'].empty:
                 results['intl_not_p2p'].to_excel(writer, sheet_name='International_Targets', index=False)
             
@@ -374,52 +383,10 @@ def create_comprehensive_excel_report(results, filter_desc=""):
             if not results['domestic_other_not_p2p'].empty:
                 results['domestic_other_not_p2p'].to_excel(writer, sheet_name='Domestic_Targets', index=False)
             
-            # Sheet 4: International Withdrawal Segments
-            if 'detailed_analysis' in results['intl_withdrawal_segments'] and not results['intl_withdrawal_segments']['detailed_analysis'].empty:
-                results['intl_withdrawal_segments']['detailed_analysis'].to_excel(writer, sheet_name='Intl_Withdrawal_Segments', index=False)
-            
-            # Sheet 5: International Received & Withdrew
-            if 'received_withdrew' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_withdrew'].empty:
-                results['specific_intl_groups']['received_withdrew'].to_excel(writer, sheet_name='Intl_Received_Withdrew', index=False)
-            
-            # Sheet 6: International Received, No Withdrawal, Other Services
-            if 'received_no_withdraw_other' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_no_withdraw_other'].empty:
-                results['specific_intl_groups']['received_no_withdraw_other'].to_excel(writer, sheet_name='Intl_No_Withdraw_Other', index=False)
-            
-            # Sheet 7: International Received & Only Withdrew
-            if 'received_only_withdraw' in results['specific_intl_groups'] and not results['specific_intl_groups']['received_only_withdraw'].empty:
-                results['specific_intl_groups']['received_only_withdraw'].to_excel(writer, sheet_name='Intl_Only_Withdrew', index=False)
-            
-            # Sheet 8: Impact Template
+            # Sheet 4: Impact Template
             results['impact_template'].to_excel(writer, sheet_name='Impact_Template', index=False)
             
-            # Sheet 9: Detailed Metrics
-            metrics_data = [
-                ['DETAILED PERFORMANCE METRICS'],
-                [''],
-                ['CONVERSION POTENTIAL ANALYSIS'],
-                ['International to P2P Conversion Rate', f"{(results['summary_stats']['intl_not_p2p'] / max(results['summary_stats']['intl_customers'], 1) * 100):.1f}%"],
-                ['Domestic Cross-sell Potential', f"{(results['summary_stats']['domestic_not_p2p'] / max(results['summary_stats']['other_customers'], 1) * 100):.1f}%"],
-                ['Overall Market Penetration', f"{(results['summary_stats']['p2p_customers'] / max(results['summary_stats']['unique_customers'], 1) * 100):.1f}%"],
-                [''],
-                ['INTERNATIONAL WITHDRAWAL BEHAVIOR (Percentage against International Received)'],
-                ['Low Withdrawal (≤25%) Customers', results['summary_stats'].get('intl_withdrawal_segment_25', 0)],
-                ['Moderate Withdrawal (25-50%) Customers', results['summary_stats'].get('intl_withdrawal_segment_50', 0)],
-                ['High Withdrawal (50-75%) Customers', results['summary_stats'].get('intl_withdrawal_segment_75', 0)],
-                ['Very High Withdrawal (75-100%) Customers', results['summary_stats'].get('intl_withdrawal_segment_100', 0)],
-                [''],
-                ['CUSTOMER SEGMENT DISTRIBUTION'],
-                ['International Focus Group Size', results['summary_stats']['intl_not_p2p']],
-                ['Domestic Focus Group Size', results['summary_stats']['domestic_not_p2p']],
-                ['Received & Withdrew Group', results['summary_stats'].get('received_withdrew_count', 0)],
-                ['Received, No Withdrawal Group', results['summary_stats'].get('received_no_withdraw_other_count', 0)],
-                ['Received & Only Withdrew Group', results['summary_stats'].get('received_only_withdraw_count', 0)]
-            ]
-            
-            metrics_df = pd.DataFrame(metrics_data)
-            metrics_df.to_excel(writer, sheet_name='Detailed_Metrics', index=False, header=False)
-            
-            # Sheet 10: Recommendations
+            # Sheet 5: Recommendations
             recommendations = [
                 ['TELEMARKETING CAMPAIGN RECOMMENDATIONS'],
                 [''],
@@ -434,22 +401,13 @@ def create_comprehensive_excel_report(results, filter_desc=""):
                 ['6. Promote P2P as faster alternative to current services'],
                 ['7. Offer loyalty rewards for P2P adoption'],
                 [''],
-                ['INTERNATIONAL WITHDRAWAL SEGMENT STRATEGY (Based on % of International Received)'],
-                [f'8. Low Withdrawal (≤25%): {results["summary_stats"].get("intl_withdrawal_segment_25", 0)} customers - Focus on retention & premium services'],
-                [f'9. Moderate (25-50%): {results["summary_stats"].get("intl_withdrawal_segment_50", 0)} customers - Balance service education'],
-                [f'10. High (50-75%): {results["summary_stats"].get("intl_withdrawal_segment_75", 0)} customers - Risk mitigation strategies'],
-                [f'11. Very High (75-100%): {results["summary_stats"].get("intl_withdrawal_segment_100", 0)} customers - Immediate attention required'],
-                [''],
                 ['CAMPAIGN IMPLEMENTATION'],
-                ['12. Use the Impact Template for daily tracking'],
-                ['13. Schedule calls during peak transaction hours'],
-                ['14. Train agents on P2P benefits and features'],
-                ['15. Track conversion rates weekly'],
-                ['16. Collect customer feedback systematically'],
-                ['17. Follow up with unreached customers within 48 hours'],
-                ['18. Monitor high-withdrawal customers for churn risk'],
-                ['19. Develop targeted messaging for each segment'],
-                ['20. Set clear KPIs and review progress bi-weekly']
+                ['8. Use the Impact Template for daily tracking'],
+                ['9. Schedule calls during peak transaction hours'],
+                ['10. Train agents on P2P benefits and features'],
+                ['11. Track conversion rates weekly'],
+                ['12. Collect customer feedback systematically'],
+                ['13. Follow up with unreached customers within 48 hours']
             ]
             
             rec_df = pd.DataFrame(recommendations)
@@ -460,10 +418,45 @@ def create_comprehensive_excel_report(results, filter_desc=""):
     
     except Exception as e:
         st.error(f"Error creating Excel file: {str(e)}")
-        # Fall back to CSV/ZIP format
-        return create_zip_with_csv_files(results, filter_desc)
+        return None
 
-# Main function with updated download section
+def filter_data(df, start_date, end_date, product_filter, customer_type_filter, pair_filter="all_customers"):
+    """Filter data based on selected criteria"""
+    filtered_df = df.copy()
+    
+    # First apply customer pair filter if not "all_customers"
+    if pair_filter != "all_customers":
+        filtered_df, filter_desc, customer_count = filter_by_customer_pair(filtered_df, pair_filter)
+    else:
+        filter_desc = "Showing all customers"
+        customer_count = filtered_df['User Identifier'].nunique()
+    
+    # Date filter
+    if start_date and end_date:
+        filtered_df = filtered_df[
+            (filtered_df['Created At'] >= pd.Timestamp(start_date)) & 
+            (filtered_df['Created At'] <= pd.Timestamp(end_date + timedelta(days=1)))
+        ]
+    
+    # Product filter
+    if product_filter and product_filter != 'All':
+        filtered_df = filtered_df[filtered_df['Product Name'].str.contains(product_filter, case=False, na=False)]
+    
+    # Customer type filter
+    if customer_type_filter and customer_type_filter != 'All':
+        if customer_type_filter == 'Customer Only':
+            filtered_df = filtered_df[
+                (filtered_df['Entity Name'].str.contains('Customer', case=False, na=False)) |
+                (filtered_df['Entity Name'].isna()) |
+                (filtered_df['Entity Name'] == '')
+            ]
+        elif customer_type_filter == 'Vendor/Agent Only':
+            filtered_df = filtered_df[
+                (filtered_df['Entity Name'].str.contains('Vendor|Agent', case=False, na=False))
+            ]
+    
+    return filtered_df, filter_desc, customer_count
+
 def main():
     """Main Streamlit app"""
     st.markdown('<h1 class="main-header">📊 Telemarketing Campaign Analyzer</h1>', unsafe_allow_html=True)
@@ -493,10 +486,7 @@ def main():
                     "intl_not_p2p": "International remittance but NOT P2P",
                     "p2p_not_deposit": "P2P but NOT Deposit",
                     "p2p_and_withdrawal": "P2P AND Withdrawal",
-                    "intl_and_p2p": "International remittance AND P2P",
-                    "intl_received_withdraw": "Received International & Withdrew",
-                    "intl_received_no_withdraw": "Received International, NO Withdrawal",
-                    "intl_received_only_withdraw": "Received International & ONLY Withdrew"
+                    "intl_and_p2p": "International remittance AND P2P"
                 }
                 
                 selected_pair_filter = st.selectbox(
@@ -553,6 +543,17 @@ def main():
                     type="primary",
                     use_container_width=True
                 )
+                
+                # Add sample data preview
+                with st.expander("📋 Data Preview"):
+                    st.dataframe(df.head(50), use_container_width=True)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Total Rows", f"{len(df):,}")
+                    with col2:
+                        date_range = f"{min_date} to {max_date}" if df['Created At'].notna().any() else "No dates"
+                        st.metric("Date Range", date_range)
         else:
             st.info("👈 Please upload a transaction file to begin analysis")
             df = None
@@ -600,12 +601,7 @@ def main():
                 "📊 Executive Summary",
                 "🎯 International Targets", 
                 "🏠 Domestic Targets", 
-                "📈 Intl Withdrawal Segments",
-                "💸 Intl Received & Withdrew",
-                "🔄 Intl No Withdraw Other",
-                "💰 Intl Only Withdrew",
                 "📋 Impact Template", 
-                "📊 Detailed Metrics",
                 "💡 Recommendations"
             ]
             
@@ -631,17 +627,22 @@ def main():
                 with col1:
                     st.info(f"**International Opportunity**: {results['summary_stats']['intl_not_p2p']} customers using international remittance but not P2P")
                     st.info(f"**Domestic Opportunity**: {results['summary_stats']['domestic_not_p2p']} customers using other services but not P2P")
-                
-                with col2:
-                    if 'total_intl_recipients' in results['summary_stats']:
-                        st.info(f"**International Recipients**: {results['summary_stats']['total_intl_recipients']} customers received international remittance")
-                        st.info(f"**Avg Withdrawal Rate**: {results['summary_stats'].get('avg_withdrawal_percentage', 0):.1f}% of international received amount withdrawn")
+                    st.info(f"**P2P Penetration**: {results['summary_stats']['p2p_customers']} customers already using P2P ({results['summary_stats']['p2p_customers']/max(results['summary_stats']['unique_customers'],1)*100:.1f}%)")
             
             with tabs[1]:  # International Targets
                 st.subheader("International Customers NOT Using P2P")
                 if not results['intl_not_p2p'].empty:
                     st.dataframe(results['intl_not_p2p'], use_container_width=True)
                     st.info(f"Found {len(results['intl_not_p2p'])} international customers not using P2P")
+                    
+                    # Additional insights
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        avg_intl_tx = results['intl_not_p2p']['International_Transaction_Count'].mean()
+                        st.metric("Avg Intl Transactions", f"{avg_intl_tx:.1f}")
+                    with col2:
+                        recent_customers = len(results['intl_not_p2p'][results['intl_not_p2p']['Last_Transaction_Date'] >= '2024-01-01'])
+                        st.metric("Recent Activity", f"{recent_customers}", "Since 2024")
                 else:
                     st.info("No international customers found who are not using P2P")
             
@@ -650,52 +651,111 @@ def main():
                 if not results['domestic_other_not_p2p'].empty:
                     st.dataframe(results['domestic_other_not_p2p'], use_container_width=True)
                     st.info(f"Found {len(results['domestic_other_not_p2p'])} domestic customers not using P2P")
+                    
+                    # Additional insights
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        avg_other_services = results['domestic_other_not_p2p']['Other_Services_Count'].mean()
+                        st.metric("Avg Other Services", f"{avg_other_services:.1f}")
+                    with col2:
+                        active_customers = len(results['domestic_other_not_p2p'][results['domestic_other_not_p2p']['Total_Transactions'] > 5])
+                        st.metric("Active Customers", f"{active_customers}", "5+ transactions")
                 else:
                     st.info("No domestic customers found who are not using P2P")
             
-            # [Other tabs remain the same...]
-            # ... rest of the tab content remains the same as before ...
+            with tabs[3]:  # Impact Template
+                st.subheader("Daily Impact Report Template")
+                st.dataframe(results['impact_template'], use_container_width=True)
+                st.info("Use this template to track daily calling campaign results")
             
-            # Download section - UPDATED
+            with tabs[4]:  # Recommendations
+                st.subheader("Campaign Recommendations")
+                
+                st.info("**Priority 1: International Customer Engagement**")
+                st.write(f"1. Target {results['summary_stats']['intl_not_p2p']} international customers not using P2P")
+                st.write("2. Focus on customers with recent international transactions")
+                st.write("3. Offer P2P fee waivers for first 3 transactions")
+                st.write("4. Bundle P2P with international remittance services")
+                
+                st.info("**Priority 2: Domestic Customer Cross-Sell**")
+                st.write(f"5. Engage {results['summary_stats']['domestic_not_p2p']} domestic customers")
+                st.write("6. Promote P2P as faster alternative to current services")
+                st.write("7. Offer loyalty rewards for P2P adoption")
+                
+                st.info("**Campaign Implementation**")
+                st.write("8. Use the Impact Template for daily tracking")
+                st.write("9. Schedule calls during peak transaction hours")
+                st.write("10. Train agents on P2P benefits and features")
+                st.write("11. Track conversion rates weekly")
+                st.write("12. Collect customer feedback systematically")
+                st.write("13. Follow up with unreached customers within 48 hours")
+            
+            # Download section
             st.markdown('<h2 class="sub-header">📥 Download Comprehensive Report</h2>', unsafe_allow_html=True)
             
-            st.info("The comprehensive report includes all analysis results:")
-            
-            sheets_info = [
-                "1. **Executive Summary**: Overall campaign summary and key metrics",
-                "2. **International Targets**: Customers using international remittance but not P2P",
-                "3. **Domestic Targets**: Domestic customers using other services but not P2P",
-                "4. **Intl Withdrawal Segments**: International recipients segmented by withdrawal percentage",
-                "5. **Intl Received & Withdrew**: Customers who received international and withdrew",
-                "6. **Intl No Withdraw Other**: Received international, no withdrawal, used other services",
-                "7. **Intl Only Withdrew**: Received international and only withdrew (no other services)",
-                "8. **Impact Template**: Daily tracking template for campaign progress",
-                "9. **Detailed Metrics**: Comprehensive performance metrics",
-                "10. **Recommendations**: Actionable campaign recommendations"
-            ]
-            
-            for info in sheets_info:
-                st.write(info)
-            
-            # Create and download comprehensive report
-            report_data = create_comprehensive_excel_report(results, filter_desc)
-            if report_data:
-                if OPENPYXL_AVAILABLE:
-                    file_name = f"telemarketing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    label = "📊 Download Excel Report (10 Sheets)"
-                else:
-                    file_name = f"telemarketing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-                    mime_type = "application/zip"
-                    label = "📦 Download ZIP Report (10 CSV Files)"
+            if not OPENPYXL_AVAILABLE:
+                st.warning("⚠️ openpyxl is not installed. Excel export is not available.")
+                st.info("To enable Excel export, install openpyxl by running: `pip install openpyxl`")
+            else:
+                st.info("The comprehensive Excel report includes 5 sheets with all analysis results:")
                 
+                sheets_info = [
+                    "1. **Executive_Summary**: Overall campaign summary and key metrics",
+                    "2. **International_Targets**: Customers using international remittance but not P2P",
+                    "3. **Domestic_Targets**: Domestic customers using other services but not P2P",
+                    "4. **Impact_Template**: Daily tracking template for campaign progress",
+                    "5. **Recommendations**: Actionable campaign recommendations"
+                ]
+                
+                for info in sheets_info:
+                    st.write(info)
+                
+                # Create and download comprehensive Excel report
+                excel_data = create_excel_workbook(results, filter_desc)
+                if excel_data:
+                    st.download_button(
+                        label="📊 Download Excel Report (5 Sheets)",
+                        data=excel_data,
+                        file_name=f"telemarketing_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        help="Download all analysis in one Excel file with 5 detailed sheets"
+                    )
+            
+            # Individual download buttons for convenience
+            st.markdown("### Individual Downloads")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if not results['intl_not_p2p'].empty:
+                    csv_intl = results['intl_not_p2p'].to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="🎯 International Targets (CSV)",
+                        data=csv_intl,
+                        file_name="international_targets.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+            
+            with col2:
+                if not results['domestic_other_not_p2p'].empty:
+                    csv_domestic = results['domestic_other_not_p2p'].to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="🏠 Domestic Targets (CSV)",
+                        data=csv_domestic,
+                        file_name="domestic_targets.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+            
+            with col3:
+                csv_impact = results['impact_template'].to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label=label,
-                    data=report_data,
-                    file_name=file_name,
-                    mime=mime_type,
-                    use_container_width=True,
-                    help="Download all analysis in one file"
+                    label="📋 Impact Template (CSV)",
+                    data=csv_impact,
+                    file_name="impact_template.csv",
+                    mime="text/csv",
+                    use_container_width=True
                 )
             
             # Call-to-action
@@ -711,8 +771,7 @@ def main():
                 daily_target = total_targets // campaign_days if campaign_days > 0 else total_targets
                 st.metric("Daily Target", f"{daily_target:,}", f"over {campaign_days} days")
             with col3:
-                high_withdrawal = results['summary_stats'].get('intl_withdrawal_segment_75', 0) + results['summary_stats'].get('intl_withdrawal_segment_100', 0)
-                st.metric("High Withdrawal", f"{high_withdrawal:,}", "customers for retention")
+                st.metric("Success Rate Goal", "20%", "minimum conversion target")
 
 if __name__ == "__main__":
     main()
