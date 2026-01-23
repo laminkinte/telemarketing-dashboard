@@ -57,6 +57,13 @@ st.markdown("""
     .dataframe {
         font-size: 0.9rem;
     }
+    .filter-pair-info {
+        background-color: #f0f9ff;
+        padding: 0.75rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #3B82F6;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,9 +134,73 @@ def load_data(uploaded_file):
         st.error(f"Error loading file: {str(e)}")
         return None
 
-def filter_data(df, start_date, end_date, product_filter, customer_type_filter):
+def filter_by_customer_pair(df, filter_pair):
+    """Filter customers based on transaction behavior pairs"""
+    
+    # Define product categories
+    p2p_products = ['Internal Wallet Transfer (P2P)', 'Internal Wallet Transfer', 'P2P Transfer', 'Wallet Transfer', 'P2P']
+    international_remittance = ['International Remittance', 'International Transfer', 'Remittance', 'International']
+    deposit_products = ['Deposit', 'Cash In', 'Deposit Customer', 'Deposit Agent']
+    withdrawal_products = ['Withdrawal', 'Scan To Withdraw Agent', 'Scan To Withdraw Customer', 'Cash Out', 'Withdraw']
+    
+    # Get unique customers
+    unique_customers = df['User Identifier'].dropna().unique()
+    
+    # Helper function to get customers for a product category
+    def get_customers_for_product(product_list):
+        mask = df['Product Name'].str.contains('|'.join(product_list), case=False, na=False)
+        return df[mask]['User Identifier'].dropna().unique()
+    
+    # Get customer sets for each product category
+    p2p_customers = set(get_customers_for_product(p2p_products))
+    intl_customers = set(get_customers_for_product(international_remittance))
+    deposit_customers = set(get_customers_for_product(deposit_products))
+    withdrawal_customers = set(get_customers_for_product(withdrawal_products))
+    
+    # Apply the selected filter pair
+    filtered_customers = set()
+    filter_description = ""
+    
+    if filter_pair == "intl_not_p2p":
+        # Customers who did International remittance but not P2P
+        filtered_customers = intl_customers - p2p_customers
+        filter_description = f"Customers who did International remittance but NOT P2P\n\n• International Customers: {len(intl_customers):,}\n• P2P Customers: {len(p2p_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "p2p_not_deposit":
+        # Customers who did P2P but not Deposit
+        filtered_customers = p2p_customers - deposit_customers
+        filter_description = f"Customers who did P2P but NOT Deposit\n\n• P2P Customers: {len(p2p_customers):,}\n• Deposit Customers: {len(deposit_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "p2p_and_withdrawal":
+        # Customers who did P2P and withdrawal
+        filtered_customers = p2p_customers & withdrawal_customers
+        filter_description = f"Customers who did BOTH P2P and Withdrawal\n\n• P2P Customers: {len(p2p_customers):,}\n• Withdrawal Customers: {len(withdrawal_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "intl_and_p2p":
+        # Customers who did international remittances and P2P
+        filtered_customers = intl_customers & p2p_customers
+        filter_description = f"Customers who did BOTH International remittance and P2P\n\n• International Customers: {len(intl_customers):,}\n• P2P Customers: {len(p2p_customers):,}\n• Result: {len(filtered_customers):,} customers"
+    
+    elif filter_pair == "all_customers":
+        # All customers (no filter)
+        filtered_customers = set(unique_customers)
+        filter_description = f"All Customers\n\n• Total Unique Customers: {len(filtered_customers):,}"
+    
+    # Filter the dataframe to only include transactions from the selected customers
+    filtered_df = df[df['User Identifier'].isin(filtered_customers)].copy()
+    
+    return filtered_df, filter_description, len(filtered_customers)
+
+def filter_data(df, start_date, end_date, product_filter, customer_type_filter, pair_filter="all_customers"):
     """Filter data based on selected criteria"""
     filtered_df = df.copy()
+    
+    # First apply customer pair filter if not "all_customers"
+    if pair_filter != "all_customers":
+        filtered_df, filter_desc, customer_count = filter_by_customer_pair(filtered_df, pair_filter)
+    else:
+        filter_desc = "Showing all customers"
+        customer_count = filtered_df['User Identifier'].nunique()
     
     # Date filter
     if start_date and end_date:
@@ -155,7 +226,7 @@ def filter_data(df, start_date, end_date, product_filter, customer_type_filter):
                 (filtered_df['Entity Name'].str.contains('Vendor|Agent', case=False, na=False))
             ]
     
-    return filtered_df
+    return filtered_df, filter_desc, customer_count
 
 def create_visualizations(filtered_df, start_date, end_date):
     """Create all visualizations"""
@@ -407,7 +478,7 @@ def analyze_telemarketing_data(filtered_df):
         'summary_stats': summary_stats
     }
 
-def create_excel_download(results):
+def create_excel_download(results, filter_desc=""):
     """Create Excel file with all reports"""
     output = io.BytesIO()
     
@@ -427,6 +498,7 @@ def create_excel_download(results):
             # Sheet 4: Summary
             summary_df = pd.DataFrame({
                 'Metric': [
+                    'Filter Applied',
                     'Report Period Start',
                     'Report Period End',
                     'Total Transactions',
@@ -439,6 +511,7 @@ def create_excel_download(results):
                     'Total Addressable Market'
                 ],
                 'Value': [
+                    filter_desc[:100],  # Truncate if too long
                     results['summary_stats']['start_date'],
                     results['summary_stats']['end_date'],
                     results['summary_stats']['total_transactions'],
@@ -496,6 +569,36 @@ def main():
                 df = load_data(uploaded_file)
             
             if df is not None:
+                # Customer Pair Filter
+                st.subheader("🎯 Customer Behavior Filter")
+                
+                pair_filter_options = {
+                    "all_customers": "All Customers",
+                    "intl_not_p2p": "International remittance but NOT P2P",
+                    "p2p_not_deposit": "P2P but NOT Deposit",
+                    "p2p_and_withdrawal": "P2P AND Withdrawal",
+                    "intl_and_p2p": "International remittance AND P2P"
+                }
+                
+                selected_pair_filter = st.selectbox(
+                    "Select Customer Behavior Pair:",
+                    options=list(pair_filter_options.keys()),
+                    format_func=lambda x: pair_filter_options[x],
+                    index=0
+                )
+                
+                # Show filter description
+                if selected_pair_filter != "all_customers":
+                    with st.expander("🔍 Filter Description"):
+                        if selected_pair_filter == "intl_not_p2p":
+                            st.info("Shows customers who have performed International remittance transactions but have NEVER used P2P services.")
+                        elif selected_pair_filter == "p2p_not_deposit":
+                            st.info("Shows customers who have used P2P services but have NEVER made any deposits.")
+                        elif selected_pair_filter == "p2p_and_withdrawal":
+                            st.info("Shows customers who have used BOTH P2P and Withdrawal services at least once.")
+                        elif selected_pair_filter == "intl_and_p2p":
+                            st.info("Shows customers who have used BOTH International remittance and P2P services.")
+                
                 # Date range filter
                 st.subheader("📅 Date Range Filter")
                 min_date = df['Created At'].min().date() if df['Created At'].notna().any() else datetime.now().date() - timedelta(days=30)
@@ -559,16 +662,22 @@ def main():
             df = None
             analyze_button = False
             start_date = end_date = product_filter = customer_type_filter = None
+            selected_pair_filter = "all_customers"
     
     # Main content area
     if uploaded_file is not None and df is not None and analyze_button:
         # Filter data
         with st.spinner("Filtering data..."):
-            filtered_df = filter_data(df, start_date, end_date, product_filter, customer_type_filter)
+            filtered_df, filter_desc, customer_count = filter_data(
+                df, start_date, end_date, product_filter, customer_type_filter, selected_pair_filter
+            )
         
         if len(filtered_df) == 0:
             st.warning("⚠️ No data found for the selected filters. Please adjust your criteria.")
         else:
+            # Display filter info
+            st.markdown(f'<div class="filter-pair-info">{filter_desc}</div>', unsafe_allow_html=True)
+            
             # Display metrics
             st.markdown('<h2 class="sub-header">📈 Key Metrics</h2>', unsafe_allow_html=True)
             
@@ -577,12 +686,28 @@ def main():
             with col1:
                 st.metric("Total Transactions", f"{len(filtered_df):,}")
             with col2:
-                st.metric("Unique Customers", f"{filtered_df['User Identifier'].nunique():,}")
+                st.metric("Unique Customers", f"{customer_count:,}")
             with col3:
                 date_range_str = f"{start_date} to {end_date}"
                 st.metric("Date Range", date_range_str)
             with col4:
                 st.metric("Products", filtered_df['Product Name'].nunique())
+            
+            # Show current filter info
+            with st.expander("📋 Current Filter Information", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Applied Filters:**")
+                    st.write(f"- Customer Pair: {pair_filter_options[selected_pair_filter]}")
+                    st.write(f"- Date Range: {start_date} to {end_date}")
+                    st.write(f"- Product Filter: {product_filter}")
+                    st.write(f"- Customer Type: {customer_type_filter}")
+                
+                with col2:
+                    st.write("**Filter Results:**")
+                    st.write(f"- Transactions after filter: {len(filtered_df):,}")
+                    st.write(f"- Customers after filter: {customer_count:,}")
+                    st.write(f"- Data coverage: {len(filtered_df)/len(df)*100:.1f}% of original data")
             
             # Create visualizations
             st.markdown('<h2 class="sub-header">📊 Data Visualizations</h2>', unsafe_allow_html=True)
@@ -740,7 +865,7 @@ def main():
             
             with col1:
                 # Download Excel report
-                excel_data = create_excel_download(results)
+                excel_data = create_excel_download(results, filter_desc)
                 if excel_data:
                     st.download_button(
                         label="📊 Download Full Report",
