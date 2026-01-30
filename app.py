@@ -49,8 +49,69 @@ st.markdown("""
         border-left: 4px solid #3B82F6;
         margin: 0.5rem 0;
     }
+    .debug-info {
+        background-color: #fff7ed;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #f97316;
+        margin: 1rem 0;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+def show_data_preview(df):
+    """Show data preview in sidebar"""
+    st.sidebar.subheader("📋 Data Preview")
+    
+    if df is not None:
+        # Basic info
+        st.sidebar.write(f"**Rows:** {len(df):,}")
+        st.sidebar.write(f"**Columns:** {len(df.columns)}")
+        
+        # Date info
+        if 'Created At' in df.columns:
+            if df['Created At'].notna().any():
+                min_date = df['Created At'].min()
+                max_date = df['Created At'].max()
+                st.sidebar.write(f"**Date Range:**")
+                st.sidebar.write(f"- Start: {min_date.strftime('%Y-%m-%d')}")
+                st.sidebar.write(f"- End: {max_date.strftime('%Y-%m-%d')}")
+                st.sidebar.write(f"- Total days: {(max_date - min_date).days + 1}")
+            else:
+                st.sidebar.write("**Date Range:** No valid dates found")
+        
+        # Customer info
+        if 'User Identifier' in df.columns:
+            unique_customers = df['User Identifier'].nunique()
+            st.sidebar.write(f"**Unique Customers:** {unique_customers:,}")
+        
+        # Column info
+        st.sidebar.write("**Columns:**")
+        for col in df.columns:
+            non_null = df[col].notna().sum()
+            dtype = str(df[col].dtype)
+            st.sidebar.write(f"- `{col}`: {non_null:,} non-null ({dtype})")
+        
+        # Sample product names
+        if 'Product Name' in df.columns:
+            st.sidebar.write("**Sample Product Names:**")
+            sample_products = df['Product Name'].dropna().unique()[:8]
+            for prod in sample_products:
+                st.sidebar.write(f"- {prod}")
+            if len(df['Product Name'].unique()) > 8:
+                st.sidebar.write(f"... and {len(df['Product Name'].unique()) - 8} more")
+        
+        # Entity Name distribution
+        if 'Entity Name' in df.columns:
+            st.sidebar.write("**Entity Name Distribution:**")
+            entity_counts = df['Entity Name'].value_counts()
+            for entity, count in entity_counts.head(5).items():
+                if pd.isna(entity) or entity == '':
+                    entity = 'Empty/NaN'
+                st.sidebar.write(f"- '{entity}': {count:,}")
+            if len(entity_counts) > 5:
+                st.sidebar.write(f"... and {len(entity_counts) - 5} more")
 
 def load_data(uploaded_file):
     """Load and clean the transaction data"""
@@ -90,33 +151,62 @@ def load_data(uploaded_file):
             if col in df.columns:
                 df[col] = df[col].astype(str).str.strip()
         
+        # Clean User Identifier
         df['User Identifier'] = pd.to_numeric(df['User Identifier'], errors='coerce')
         
-        # Parse date column
-        date_formats = ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%d-%m-%Y %H:%M:%S', 
-                       '%d/%m/%Y %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y']
+        # Parse date column with multiple formats
+        date_formats = [
+            '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f',
+            '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M:%S.%f',
+            '%d-%m-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S.%f',
+            '%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M:%S.%f',
+            '%Y-%m-%d', '%Y/%m/%d', '%d-%m-%Y', '%d/%m/%Y',
+            '%m-%d-%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S'
+        ]
+        
+        original_dates = df['Created At'].copy()
+        df['Created At'] = pd.NaT
         
         for fmt in date_formats:
             try:
-                df['Created At'] = pd.to_datetime(df['Created At'], format=fmt, errors='coerce')
-                if df['Created At'].notna().any():
-                    break
-            except:
+                mask = df['Created At'].isna()
+                parsed = pd.to_datetime(original_dates[mask], format=fmt, errors='coerce')
+                df.loc[mask, 'Created At'] = parsed
+                if not parsed.isna().all():
+                    st.sidebar.write(f"  ✓ Parsed some dates with format: {fmt}")
+            except Exception as e:
                 continue
         
         # If still not parsed, try generic parsing
-        if df['Created At'].isna().all():
-            df['Created At'] = pd.to_datetime(df['Created At'], errors='coerce')
+        if df['Created At'].isna().any():
+            remaining_mask = df['Created At'].isna()
+            df.loc[remaining_mask, 'Created At'] = pd.to_datetime(
+                original_dates[remaining_mask], errors='coerce'
+            )
+        
+        # Report date parsing results
+        parsed_count = df['Created At'].notna().sum()
+        failed_count = len(df) - parsed_count
+        
+        if parsed_count > 0:
+            st.sidebar.success(f"✅ Parsed {parsed_count:,} dates successfully")
+        if failed_count > 0:
+            st.sidebar.warning(f"⚠️ Failed to parse {failed_count:,} dates")
         
         # Add derived columns
         df['Date'] = df['Created At'].dt.date
         df['Day'] = df['Created At'].dt.day_name()
         df['Hour'] = df['Created At'].dt.hour
         
+        # Drop rows with invalid dates if requested
+        if df['Created At'].isna().any():
+            st.sidebar.info(f"⚠️ {df['Created At'].isna().sum():,} rows have invalid dates")
+        
         return df
     
     except Exception as e:
         st.error(f"Error loading file: {str(e)}")
+        st.info("Please check the file format and try again.")
         return None
 
 def filter_by_customer_pair(df, filter_pair):
@@ -728,36 +818,80 @@ def filter_data(df, start_date, end_date, product_filter, customer_type_filter, 
     """Filter data based on selected criteria"""
     filtered_df = df.copy()
     
+    # Show debug information
+    debug_info = []
+    debug_info.append(f"**Initial data:** {len(filtered_df):,} rows")
+    
     # First apply customer pair filter if not "all_customers"
     if pair_filter != "all_customers":
         filtered_df, filter_desc, customer_count = filter_by_customer_pair(filtered_df, pair_filter)
+        debug_info.append(f"**After pair filter ({pair_filter}):** {len(filtered_df):,} rows")
     else:
         filter_desc = "Showing all customers"
         customer_count = filtered_df['User Identifier'].nunique()
     
-    # Date filter
-    if start_date and end_date:
-        filtered_df = filtered_df[
-            (filtered_df['Created At'] >= pd.Timestamp(start_date)) & 
-            (filtered_df['Created At'] <= pd.Timestamp(end_date + timedelta(days=1)))
-        ]
+    # Date filter - only apply if we have dates in the data
+    if start_date and end_date and 'Created At' in filtered_df.columns:
+        debug_info.append(f"**Date filter:** {start_date} to {end_date}")
+        
+        # Check if we have valid dates in the data
+        valid_dates = filtered_df['Created At'].notna().sum()
+        if valid_dates == 0:
+            debug_info.append("⚠️ No valid dates in filtered data - skipping date filter")
+        else:
+            data_min_date = filtered_df['Created At'].min().date()
+            data_max_date = filtered_df['Created At'].max().date()
+            debug_info.append(f"  - Data date range: {data_min_date} to {data_max_date}")
+            
+            filtered_df = filtered_df[
+                (filtered_df['Created At'] >= pd.Timestamp(start_date)) & 
+                (filtered_df['Created At'] <= pd.Timestamp(end_date + timedelta(days=1)))
+            ]
+            debug_info.append(f"  **After date filter:** {len(filtered_df):,} rows")
     
     # Product filter
     if product_filter and product_filter != 'All':
+        debug_info.append(f"**Product filter:** '{product_filter}'")
+        before_count = len(filtered_df)
         filtered_df = filtered_df[filtered_df['Product Name'].str.contains(product_filter, case=False, na=False)]
+        debug_info.append(f"  **After product filter:** {len(filtered_df):,} rows (removed {before_count - len(filtered_df):,})")
     
     # Customer type filter
     if customer_type_filter and customer_type_filter != 'All':
+        debug_info.append(f"**Customer type filter:** '{customer_type_filter}'")
+        
+        before_count = len(filtered_df)
+        
         if customer_type_filter == 'Customer Only':
-            filtered_df = filtered_df[
-                (filtered_df['Entity Name'].str.contains('Customer', case=False, na=False)) |
+            # More flexible matching for customer type
+            mask = (
+                (filtered_df['Entity Name'].astype(str).str.contains('Customer', case=False, na=False)) |
                 (filtered_df['Entity Name'].isna()) |
-                (filtered_df['Entity Name'] == '')
-            ]
+                (filtered_df['Entity Name'].astype(str) == 'nan') |
+                (filtered_df['Entity Name'].astype(str) == '')
+            )
+            filtered_df = filtered_df[mask]
+            
         elif customer_type_filter == 'Vendor/Agent Only':
             filtered_df = filtered_df[
-                (filtered_df['Entity Name'].str.contains('Vendor|Agent', case=False, na=False))
+                (filtered_df['Entity Name'].astype(str).str.contains('Vendor|Agent', case=False, na=False))
             ]
+        
+        debug_info.append(f"  **After customer type filter:** {len(filtered_df):,} rows (removed {before_count - len(filtered_df):,})")
+    
+    # Display debug information
+    with st.expander("🔍 View Filter Debug Info", expanded=False):
+        for info in debug_info:
+            st.write(info)
+        
+        if len(filtered_df) == 0:
+            st.error("**RESULT: No data after filtering**")
+            st.info("Try these fixes:")
+            st.info("1. Check if your date range matches the data")
+            st.info("2. Check if 'Customer Only' filter is too restrictive")
+            st.info("3. Try starting with fewer filters")
+        else:
+            st.success(f"**RESULT: {len(filtered_df):,} rows after filtering**")
     
     return filtered_df, filter_desc, customer_count
 
@@ -782,6 +916,9 @@ def main():
                 df = load_data(uploaded_file)
             
             if df is not None:
+                # Show data preview
+                show_data_preview(df)
+                
                 # Customer Pair Filter
                 st.subheader("🎯 Customer Behavior Filter")
                 
@@ -800,40 +937,57 @@ def main():
                     "Select Customer Behavior Pair:",
                     options=list(pair_filter_options.keys()),
                     format_func=lambda x: pair_filter_options[x],
-                    index=0
+                    index=0,
+                    help="Start with 'All Customers' to see all data"
                 )
                 
                 # Date range filter
                 st.subheader("📅 Date Range Filter")
-                min_date = df['Created At'].min().date() if df['Created At'].notna().any() else datetime.now().date() - timedelta(days=30)
-                max_date = df['Created At'].max().date() if df['Created At'].notna().any() else datetime.now().date()
                 
-                start_date = st.date_input(
-                    "Start Date",
-                    value=min_date,
-                    min_value=min_date,
-                    max_value=max_date
-                )
-                
-                end_date = st.date_input(
-                    "End Date",
-                    value=max_date,
-                    min_value=min_date,
-                    max_value=max_date
-                )
+                # Get actual date range from data
+                if df['Created At'].notna().any():
+                    min_date = df['Created At'].min().date()
+                    max_date = df['Created At'].max().date()
+                    
+                    # Use the full date range by default
+                    start_date = st.date_input(
+                        "Start Date",
+                        value=min_date,
+                        min_value=min_date,
+                        max_value=max_date,
+                        help=f"Data ranges from {min_date} to {max_date}"
+                    )
+                    
+                    end_date = st.date_input(
+                        "End Date",
+                        value=max_date,
+                        min_value=min_date,
+                        max_value=max_date,
+                        help=f"Data ranges from {min_date} to {max_date}"
+                    )
+                else:
+                    st.warning("No valid dates found in data")
+                    min_date = datetime.now().date() - timedelta(days=30)
+                    max_date = datetime.now().date()
+                    start_date = st.date_input("Start Date", value=min_date)
+                    end_date = st.date_input("End Date", value=max_date)
                 
                 # Product filter
                 st.subheader("📦 Product Filter")
                 product_names = df['Product Name'].dropna().unique()
                 if len(product_names) > 0:
-                    unique_products = ['All'] + sorted([str(p) for p in product_names if str(p) != 'nan'])[:50]
+                    # Sort and show most common products first
+                    product_counts = df['Product Name'].value_counts()
+                    top_products = product_counts.head(20).index.tolist()
+                    unique_products = ['All'] + sorted(top_products, key=lambda x: str(x))
                 else:
                     unique_products = ['All']
                 
                 product_filter = st.selectbox(
                     "Filter by Product",
                     options=unique_products,
-                    index=0
+                    index=0,
+                    help="Start with 'All' to see all products"
                 )
                 
                 # Customer type filter
@@ -841,15 +995,27 @@ def main():
                 customer_type_filter = st.selectbox(
                     "Filter by Customer Type",
                     options=['All', 'Customer Only', 'Vendor/Agent Only'],
-                    index=0
+                    index=0,
+                    help="Start with 'All' to include all customer types"
                 )
                 
                 # Analyze button
                 analyze_button = st.button(
                     "🚀 Analyze Data",
                     type="primary",
-                    use_container_width=True
+                    use_container_width=True,
+                    help="Click to analyze with current filters"
                 )
+                
+                # Quick start tips
+                st.markdown("---")
+                st.subheader("💡 Quick Start Tips")
+                st.info("""
+                1. Start with **All Customers** filter
+                2. Use **All** for Product and Customer Type
+                3. Use the full date range shown
+                4. After seeing data, apply specific filters
+                """)
         else:
             st.info("👈 Please upload a transaction file to begin analysis")
             df = None
@@ -866,7 +1032,43 @@ def main():
             )
         
         if len(filtered_df) == 0:
-            st.warning("⚠️ No data found for the selected filters. Please adjust your criteria.")
+            st.error("⚠️ No data found for the selected filters!")
+            
+            # Show debug information
+            st.markdown('<div class="debug-info">', unsafe_allow_html=True)
+            st.subheader("🔍 Troubleshooting Guide")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Common Issues:**")
+                st.write("1. **Date mismatch** - Your selected dates don't match data")
+                st.write("2. **Customer Only filter** - No 'Customer' in Entity Name")
+                st.write("3. **Product filter** - Product name doesn't match")
+                st.write("4. **Pair filter** - No customers match the behavior")
+            
+            with col2:
+                st.write("**Quick Solutions:**")
+                st.write("1. Check date range in sidebar preview")
+                st.write("2. Try 'All' for Customer Type")
+                st.write("3. Try 'All' for Product filter")
+                st.write("4. Start with 'All Customers' pair filter")
+            
+            # Try with minimal filters
+            st.write("**Try this:**")
+            if st.button("🔄 Analyze with minimal filters (All Customers, All products)"):
+                with st.spinner("Trying with minimal filters..."):
+                    filtered_df, filter_desc, customer_count = filter_data(
+                        df, start_date, end_date, 'All', 'All', "all_customers"
+                    )
+                    if len(filtered_df) > 0:
+                        st.success(f"✅ Found {len(filtered_df):,} rows with minimal filters!")
+                        st.rerun()
+                    else:
+                        st.error("Still no data! Check your date range.")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
         else:
             # Display filter info
             st.markdown(f'<div class="filter-pair-info">{filter_desc}</div>', unsafe_allow_html=True)
@@ -881,10 +1083,29 @@ def main():
             with col2:
                 st.metric("Unique Customers", f"{customer_count:,}")
             with col3:
-                date_range_str = f"{start_date} to {end_date}"
-                st.metric("Date Range", date_range_str)
+                date_range = f"{start_date} to {end_date}"
+                st.metric("Date Range", date_range)
             with col4:
-                st.metric("Products", filtered_df['Product Name'].nunique())
+                product_count = filtered_df['Product Name'].nunique()
+                st.metric("Unique Products", f"{product_count}")
+            
+            # Additional metrics row
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                if filtered_df['Created At'].notna().any():
+                    earliest = filtered_df['Created At'].min().strftime('%Y-%m-%d')
+                    latest = filtered_df['Created At'].max().strftime('%Y-%m-%d')
+                    st.metric("Data Span", f"{(filtered_df['Created At'].max() - filtered_df['Created At'].min()).days + 1} days")
+            with col2:
+                entity_types = filtered_df['Entity Name'].nunique()
+                st.metric("Entity Types", f"{entity_types}")
+            with col3:
+                if 'Full Name' in filtered_df.columns:
+                    named_customers = filtered_df[filtered_df['Full Name'].notna() & (filtered_df['Full Name'] != 'nan')]['Full Name'].nunique()
+                    st.metric("Named Customers", f"{named_customers:,}")
+            with col4:
+                avg_trans_per_customer = len(filtered_df) / max(customer_count, 1)
+                st.metric("Avg Tx per Customer", f"{avg_trans_per_customer:.1f}")
             
             # Run analysis
             st.markdown('<h2 class="sub-header">🎯 Telemarketing Analysis Results</h2>', unsafe_allow_html=True)
@@ -930,13 +1151,13 @@ def main():
                     st.info(f"**P2P Penetration**: {results['summary_stats']['p2p_customers']} customers already using P2P ({results['summary_stats']['p2p_customers']/max(results['summary_stats']['unique_customers'],1)*100:.1f}%)")
                 
                 with col2:
-                    if 'total_intl_analyzed' in results['summary_stats']:
+                    if 'total_intl_analyzed' in results['summary_stats'] and results['summary_stats']['total_intl_analyzed'] > 0:
                         st.info(f"**International Customers Analyzed**: {results['summary_stats']['total_intl_analyzed']} customers")
                         st.info(f"**Avg Withdrawal Rate**: {results['summary_stats'].get('avg_withdrawal_percentage', 0):.1f}%")
                 
                 # Segment Distribution
-                st.subheader("International Withdrawal Segments")
                 if 'intl_withdrawal_segments' in results and results['intl_withdrawal_segments']['withdrawal_segments']:
+                    st.subheader("International Withdrawal Segments")
                     seg_data = results['intl_withdrawal_segments']['withdrawal_segments']
                     
                     col1, col2, col3, col4 = st.columns(4)
@@ -1090,13 +1311,12 @@ def main():
                 st.write("6. Promote P2P as faster alternative to current services")
                 st.write("7. Offer loyalty rewards for P2P adoption")
                 
-                st.info("**International Withdrawal Segment Strategy**")
-                if 'intl_withdrawal_segments' in results and results['intl_withdrawal_segments']['withdrawal_segments']:
-                    seg_data = results['intl_withdrawal_segments']['summary_stats']
-                    st.write(f"8. Low Withdrawal (≤25%): {seg_data.get('segment_25_count', 0)} customers - Focus on retention & premium services")
-                    st.write(f"9. Moderate (25-50%): {seg_data.get('segment_50_count', 0)} customers - Balance service education")
-                    st.write(f"10. High (50-75%): {seg_data.get('segment_75_count', 0)} customers - Risk mitigation strategies")
-                    st.write(f"11. Very High (75-100%): {seg_data.get('segment_100_count', 0)} customers - Immediate attention required")
+                if 'total_intl_analyzed' in results['summary_stats'] and results['summary_stats']['total_intl_analyzed'] > 0:
+                    st.info("**International Withdrawal Segment Strategy**")
+                    st.write(f"8. Low Withdrawal (≤25%): {results['summary_stats'].get('intl_withdrawal_segment_25', 0)} customers - Focus on retention & premium services")
+                    st.write(f"9. Moderate (25-50%): {results['summary_stats'].get('intl_withdrawal_segment_50', 0)} customers - Balance service education")
+                    st.write(f"10. High (50-75%): {results['summary_stats'].get('intl_withdrawal_segment_75', 0)} customers - Risk mitigation strategies")
+                    st.write(f"11. Very High (75-100%): {results['summary_stats'].get('intl_withdrawal_segment_100', 0)} customers - Immediate attention required")
             
             # Download section
             st.markdown('<h2 class="sub-header">📥 Download Comprehensive Report</h2>', unsafe_allow_html=True)
@@ -1181,6 +1401,27 @@ def main():
             with col3:
                 high_withdrawal = results['summary_stats'].get('intl_withdrawal_segment_75', 0) + results['summary_stats'].get('intl_withdrawal_segment_100', 0)
                 st.metric("High Withdrawal", f"{high_withdrawal:,}", "customers for retention")
+    
+    elif uploaded_file is not None and df is not None:
+        # Show data preview in main area
+        st.markdown('<h2 class="sub-header">📋 Data Preview</h2>', unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Rows", f"{len(df):,}")
+        with col2:
+            if df['Created At'].notna().any():
+                min_date = df['Created At'].min().strftime('%Y-%m-%d')
+                max_date = df['Created At'].max().strftime('%Y-%m-%d')
+                st.metric("Date Range", f"{min_date} to {max_date}")
+        with col3:
+            st.metric("Unique Customers", f"{df['User Identifier'].nunique():,}")
+        
+        # Show sample data
+        st.markdown('<h3 class="sub-header">Sample Data (First 10 rows)</h3>', unsafe_allow_html=True)
+        st.dataframe(df.head(10), use_container_width=True)
+        
+        st.info("👈 Configure filters in the sidebar and click '🚀 Analyze Data' to begin analysis")
 
 if __name__ == "__main__":
     main()
